@@ -5,6 +5,8 @@ const musicButton = document.getElementById("toggleMusic");
 const GAME_TO = 5;
 const FLOOR_Y = canvas.height - 78;
 const BASE_GRAVITY = 1700;
+const SWAY_FREQ_HZ = 1;
+const SWAY_AMPLITUDE = (35 * Math.PI) / 180; // 70° total swing
 
 const keyMap = {
   w: 0,
@@ -21,7 +23,7 @@ const players = [
 ];
 
 const score = [0, 0];
-let roundMessage = "Hold key to jump and raise hands";
+let roundMessage = "Time your jump with sway to leap forward/back";
 let roundMessageTime = 2;
 
 const ball = {
@@ -36,10 +38,11 @@ const ball = {
 const world = {
   gravity: BASE_GRAVITY,
   hoopRadius: 58,
-  hoopY: 245,
+  hoopY: 250,
   playerScale: 1,
   handScale: 1,
   round: 1,
+  time: 0,
 };
 
 const hoops = {
@@ -49,8 +52,9 @@ const hoops = {
 
 let lastTime = performance.now();
 let musicCtx;
-let musicNodes = [];
+let beatStep = 0;
 let beatTimer = 0;
+const beatInterval = 60 / 124 / 2;
 
 function makePlayer(name, color, x, dir, key, team) {
   return {
@@ -58,23 +62,27 @@ function makePlayer(name, color, x, dir, key, team) {
     color,
     x,
     y: FLOOR_Y,
+    vx: 0,
     vy: 0,
     width: 58,
     height: 106,
     handSize: 17,
-    wobble: Math.random() * Math.PI * 2,
     dir,
     key,
     team,
     holding: false,
     wantHold: false,
     jumpCooldown: 0,
+    swayPhase: Math.random() * Math.PI * 2,
+    angle: 0,
+    tumble: 0,
+    tumbleSpin: 0,
   };
 }
 
 function applyRandomRoundSettings() {
   world.gravity = BASE_GRAVITY * randomRange(0.85, 1.2);
-  world.hoopRadius = randomRange(45, 75);
+  world.hoopRadius = randomRange(44, 76);
   world.playerScale = randomRange(0.82, 1.25);
   world.handScale = randomRange(0.8, 1.5);
 
@@ -83,9 +91,12 @@ function applyRandomRoundSettings() {
     p.height = 106 * world.playerScale;
     p.handSize = 17 * world.handScale;
     p.y = FLOOR_Y;
+    p.vx = 0;
     p.vy = 0;
     p.holding = false;
     p.wantHold = false;
+    p.tumble = 0;
+    p.tumbleSpin = 0;
   }
 
   ball.owner = null;
@@ -107,21 +118,30 @@ function clamp(v, min, max) {
 }
 
 function update(dt) {
+  world.time += dt;
+
   for (const p of players) {
     const onGround = p.y >= FLOOR_Y - 0.5;
-    p.wobble += dt * 8;
     p.jumpCooldown = Math.max(0, p.jumpCooldown - dt);
 
-    if (p.wantHold) {
-      if (onGround && p.jumpCooldown <= 0) {
-        p.vy = -780;
-        p.jumpCooldown = 0.32;
-        playGrunt();
-      }
-      p.x += p.dir * 165 * dt;
+    const sway = Math.sin((world.time + p.swayPhase) * Math.PI * 2 * SWAY_FREQ_HZ);
+    p.angle = sway * SWAY_AMPLITUDE;
+
+    if (p.wantHold && onGround && p.jumpCooldown <= 0 && p.tumble <= 0) {
+      p.vy = -760;
+      p.jumpCooldown = 0.28;
+      p.vx += Math.sin(p.angle) * 420;
+      p.vx += p.dir * 60;
+      playGrunt();
     }
 
-    p.x += Math.sin(p.wobble) * 24 * dt;
+    if (p.wantHold) {
+      p.vx += p.dir * 190 * dt;
+    }
+
+    p.vx *= onGround ? 0.9 : 0.995;
+    p.vx = clamp(p.vx, -360, 360);
+    p.x += p.vx * dt;
 
     p.vy += world.gravity * dt;
     p.y += p.vy * dt;
@@ -129,6 +149,13 @@ function update(dt) {
     if (p.y > FLOOR_Y) {
       p.y = FLOOR_Y;
       p.vy = 0;
+      if (p.tumble > 0) {
+        p.tumble = Math.max(0, p.tumble - dt * 2.6);
+      }
+    }
+
+    if (p.tumble > 0 && !onGround) {
+      p.tumble = Math.max(0, p.tumble - dt * 0.5);
     }
 
     p.x = clamp(p.x, 60, canvas.width - 60);
@@ -136,18 +163,20 @@ function update(dt) {
     if (p.holding && !p.wantHold) {
       p.holding = false;
       ball.owner = null;
-      ball.vx = p.dir * 260;
-      ball.vy = -180;
+      ball.vx = p.vx + p.dir * 220 + Math.sin(p.angle) * 180;
+      ball.vy = p.vy - 150;
     }
   }
+
+  resolvePlayerCollisions();
 
   if (ball.owner) {
     const p = ball.owner;
     const hand = getHandPosition(p);
-    ball.x = hand.x + p.dir * 12;
-    ball.y = hand.y - 8;
-    ball.vx = p.dir * 145;
-    ball.vy = p.vy * 0.4;
+    ball.x = hand.x + p.dir * 9;
+    ball.y = hand.y - 6;
+    ball.vx = p.vx;
+    ball.vy = p.vy * 0.35;
   } else {
     ball.vy += world.gravity * dt;
     ball.x += ball.vx * dt;
@@ -175,16 +204,61 @@ function update(dt) {
     roundMessageTime -= dt;
   }
 
-  beatTimer += dt;
-  if (musicCtx && beatTimer > 0.42) {
-    beatTimer = 0;
-    playBeat();
+  if (musicCtx && musicCtx.state === "running") {
+    beatTimer += dt;
+    while (beatTimer > beatInterval) {
+      beatTimer -= beatInterval;
+      playBeatStep();
+    }
   }
+}
+
+function resolvePlayerCollisions() {
+  for (let i = 0; i < players.length; i += 1) {
+    for (let j = i + 1; j < players.length; j += 1) {
+      const a = players[i];
+      const b = players[j];
+      const minDist = (a.width + b.width) * 0.35;
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const dist = Math.hypot(dx, dy) || 0.01;
+
+      if (dist < minDist && Math.abs(dy) < (a.height + b.height) * 0.55) {
+        const nx = dx / dist;
+        const overlap = minDist - dist;
+
+        a.x -= nx * overlap * 0.5;
+        b.x += nx * overlap * 0.5;
+
+        const relVx = b.vx - a.vx;
+        const impulse = relVx * 0.6;
+        a.vx += impulse;
+        b.vx -= impulse;
+
+        const impact = Math.abs(relVx);
+        if (impact > 180 && Math.random() < 0.14) {
+          triggerTumble(a, nx * -1);
+        }
+        if (impact > 180 && Math.random() < 0.14) {
+          triggerTumble(b, nx);
+        }
+      }
+    }
+  }
+}
+
+function triggerTumble(player, dir) {
+  if (player.tumble > 0.15) {
+    return;
+  }
+  player.tumble = randomRange(0.6, 1.2);
+  player.tumbleSpin = dir * randomRange(3.4, 5.1);
+  player.vy = Math.min(player.vy, -220);
 }
 
 function handlePossession() {
   for (const p of players) {
-    if (!p.wantHold) {
+    if (!p.wantHold || p.tumble > 0.25) {
       continue;
     }
     const hand = getHandPosition(p);
@@ -218,7 +292,7 @@ function checkScore() {
 function isScored(hoopX, defendingTeam) {
   const dx = ball.x - hoopX;
   const dy = ball.y - world.hoopY;
-  const inHoop = Math.abs(dx) < world.hoopRadius * 0.52 && Math.abs(dy) < 18;
+  const inHoop = Math.abs(dx) < world.hoopRadius * 0.42 && Math.abs(dy) < 18;
   const movingDown = ball.vy > 120;
   const fromEnemy = !ball.owner || ball.owner.team !== defendingTeam;
   return inHoop && movingDown && fromEnemy;
@@ -242,9 +316,10 @@ function scoreRound(teamScored) {
 
 function getHandPosition(player) {
   const lift = player.wantHold ? player.height * 0.72 : player.height * 0.48;
-  const wobble = Math.sin(player.wobble * 1.3) * 8;
+  const bodyLeanX = Math.sin(player.angle) * (player.height * 0.22);
+  const wobble = Math.sin((world.time + player.swayPhase) * Math.PI * 2) * 6;
   return {
-    x: player.x + player.dir * (player.width * 0.34 + wobble),
+    x: player.x + bodyLeanX + player.dir * (player.width * 0.3 + wobble),
     y: player.y - lift,
   };
 }
@@ -254,8 +329,8 @@ function draw() {
 
   drawBackground();
   drawCourt();
-  drawHoop(hoops.left.x);
-  drawHoop(hoops.right.x);
+  drawHoop(hoops.left.x, 1);
+  drawHoop(hoops.right.x, -1);
 
   for (const p of players) {
     drawPlayer(p);
@@ -291,43 +366,64 @@ function drawCourt() {
   ctx.stroke();
 }
 
-function drawHoop(x) {
-  ctx.strokeStyle = "#f94144";
+function drawHoop(x, facing) {
+  const boardW = 18;
+  const boardH = 125;
+  const boardX = x + facing * 28;
+
+  ctx.fillStyle = "#ffffffee";
+  ctx.fillRect(boardX - boardW / 2, world.hoopY - boardH, boardW, boardH);
+  ctx.strokeStyle = "#b3b3b3";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(boardX - boardW / 2, world.hoopY - boardH, boardW, boardH);
+
+  const rimX = x;
+  const rimY = world.hoopY;
+  const rimW = world.hoopRadius * 0.95;
+  const rimH = world.hoopRadius * 0.28;
+
+  ctx.strokeStyle = "#ef6c00";
   ctx.lineWidth = 8;
   ctx.beginPath();
-  ctx.moveTo(x, world.hoopY - 130);
-  ctx.lineTo(x, world.hoopY + 8);
+  ctx.ellipse(rimX, rimY, rimW * 0.5, rimH * 0.5, 0, 0, Math.PI * 2);
   ctx.stroke();
 
-  ctx.strokeStyle = "#f8961e";
-  ctx.lineWidth = 10;
-  ctx.beginPath();
-  ctx.arc(x, world.hoopY, world.hoopRadius * 0.52, 0.15, Math.PI - 0.15);
-  ctx.stroke();
-
-  ctx.strokeStyle = "#ffffffaa";
-  ctx.lineWidth = 3;
-  for (let i = -2; i <= 2; i += 1) {
+  ctx.strokeStyle = "#ffffffbb";
+  ctx.lineWidth = 2;
+  for (let i = -3; i <= 3; i += 1) {
     ctx.beginPath();
-    ctx.moveTo(x + i * world.hoopRadius * 0.2, world.hoopY + 4);
-    ctx.lineTo(x + i * world.hoopRadius * 0.15, world.hoopY + 40);
+    ctx.moveTo(rimX + i * (rimW * 0.08), rimY + 4);
+    ctx.bezierCurveTo(
+      rimX + i * (rimW * 0.09),
+      rimY + 18,
+      rimX + i * (rimW * 0.06),
+      rimY + 34,
+      rimX + i * (rimW * 0.03),
+      rimY + 44
+    );
     ctx.stroke();
   }
 }
 
 function drawPlayer(p) {
   const bodyTop = p.y - p.height;
-  const wob = Math.sin(p.wobble) * 5;
+  const lean = p.angle * 0.8 + p.tumbleSpin * p.tumble;
+
+  ctx.save();
+  ctx.translate(p.x, p.y - p.height * 0.5);
+  ctx.rotate(lean);
 
   ctx.fillStyle = p.color;
   ctx.beginPath();
-  ctx.roundRect(p.x - p.width / 2, bodyTop, p.width, p.height, 20);
+  ctx.roundRect(-p.width / 2, -p.height / 2, p.width, p.height, 20);
   ctx.fill();
 
   ctx.fillStyle = "#f4d3b2";
   ctx.beginPath();
-  ctx.arc(p.x + wob, bodyTop - 18, p.width * 0.32, 0, Math.PI * 2);
+  ctx.arc(0, -p.height / 2 - 20, p.width * 0.32, 0, Math.PI * 2);
   ctx.fill();
+
+  ctx.restore();
 
   const hand = getHandPosition(p);
   ctx.fillStyle = "#ffd6a5";
@@ -361,7 +457,7 @@ function drawBall() {
 
 function drawScore() {
   ctx.fillStyle = "#00000088";
-  ctx.fillRect(canvas.width / 2 - 200, 18, 400, 98);
+  ctx.fillRect(canvas.width / 2 - 260, 18, 520, 104);
 
   ctx.fillStyle = "#fff";
   ctx.textAlign = "center";
@@ -369,7 +465,7 @@ function drawScore() {
   ctx.fillText(`${score[0]} : ${score[1]}`, canvas.width / 2, 62);
 
   ctx.font = "20px sans-serif";
-  ctx.fillText(roundMessage, canvas.width / 2, 94);
+  ctx.fillText(roundMessage, canvas.width / 2, 95);
   ctx.textAlign = "start";
 }
 
@@ -382,21 +478,43 @@ function loop(ts) {
 }
 
 function playGrunt() {
-  if (!musicCtx) {
+  if (!musicCtx || musicCtx.state !== "running") {
     return;
   }
+
   const now = musicCtx.currentTime;
-  const osc = musicCtx.createOscillator();
+  const dur = randomRange(0.14, 0.23);
+
+  const noiseBuffer = musicCtx.createBuffer(1, Math.floor(musicCtx.sampleRate * dur), musicCtx.sampleRate);
+  const data = noiseBuffer.getChannelData(0);
+  for (let i = 0; i < data.length; i += 1) {
+    data[i] = (Math.random() * 2 - 1) * 0.6;
+  }
+
+  const noise = musicCtx.createBufferSource();
+  noise.buffer = noiseBuffer;
+  const noiseFilter = musicCtx.createBiquadFilter();
+  noiseFilter.type = "bandpass";
+  noiseFilter.frequency.value = randomRange(420, 720);
+  noiseFilter.Q.value = 1.3;
+
+  const voice = musicCtx.createOscillator();
+  voice.type = "sawtooth";
+  voice.frequency.setValueAtTime(randomRange(120, 160), now);
+  voice.frequency.exponentialRampToValueAtTime(randomRange(88, 110), now + dur);
+
   const gain = musicCtx.createGain();
-  osc.type = "square";
-  osc.frequency.setValueAtTime(randomRange(120, 220), now);
-  osc.frequency.exponentialRampToValueAtTime(randomRange(70, 110), now + 0.1);
   gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.exponentialRampToValueAtTime(0.18, now + 0.02);
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
-  osc.connect(gain).connect(musicCtx.destination);
-  osc.start(now);
-  osc.stop(now + 0.17);
+  gain.gain.exponentialRampToValueAtTime(0.12, now + 0.03);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+
+  noise.connect(noiseFilter).connect(gain).connect(musicCtx.destination);
+  voice.connect(gain);
+
+  noise.start(now);
+  voice.start(now);
+  noise.stop(now + dur);
+  voice.stop(now + dur);
 }
 
 function toggleMusic() {
@@ -414,28 +532,84 @@ function toggleMusic() {
   }
 }
 
-function playBeat() {
+function playBeatStep() {
   if (!musicCtx || musicCtx.state !== "running") {
     return;
   }
+
   const now = musicCtx.currentTime;
-  const note = [220, 247, 262, 294][Math.floor(Math.random() * 4)];
+  const stepInBar = beatStep % 8;
 
-  const osc = musicCtx.createOscillator();
-  const gain = musicCtx.createGain();
-  osc.type = "triangle";
-  osc.frequency.setValueAtTime(note, now);
-  gain.gain.setValueAtTime(0.0001, now);
-  gain.gain.exponentialRampToValueAtTime(0.06, now + 0.02);
-  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.35);
-  osc.connect(gain).connect(musicCtx.destination);
-  osc.start(now);
-  osc.stop(now + 0.36);
-
-  musicNodes.push(osc, gain);
-  if (musicNodes.length > 50) {
-    musicNodes.splice(0, 10);
+  // Kick
+  if (stepInBar === 0 || stepInBar === 4 || (stepInBar === 6 && Math.random() < 0.4)) {
+    const osc = musicCtx.createOscillator();
+    const gain = musicCtx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(150, now);
+    osc.frequency.exponentialRampToValueAtTime(46, now + 0.12);
+    gain.gain.setValueAtTime(0.15, now);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.14);
+    osc.connect(gain).connect(musicCtx.destination);
+    osc.start(now);
+    osc.stop(now + 0.15);
   }
+
+  // Snare / clap
+  if (stepInBar === 2 || stepInBar === 6) {
+    const dur = 0.09;
+    const buffer = musicCtx.createBuffer(1, Math.floor(musicCtx.sampleRate * dur), musicCtx.sampleRate);
+    const d = buffer.getChannelData(0);
+    for (let i = 0; i < d.length; i += 1) {
+      d[i] = Math.random() * 2 - 1;
+    }
+    const src = musicCtx.createBufferSource();
+    src.buffer = buffer;
+    const hp = musicCtx.createBiquadFilter();
+    hp.type = "highpass";
+    hp.frequency.value = 1100;
+    const g = musicCtx.createGain();
+    g.gain.setValueAtTime(0.09, now);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    src.connect(hp).connect(g).connect(musicCtx.destination);
+    src.start(now);
+    src.stop(now + dur);
+  }
+
+  // Hi-hat
+  {
+    const hatDur = 0.04;
+    const b = musicCtx.createBuffer(1, Math.floor(musicCtx.sampleRate * hatDur), musicCtx.sampleRate);
+    const hd = b.getChannelData(0);
+    for (let i = 0; i < hd.length; i += 1) {
+      hd[i] = (Math.random() * 2 - 1) * 0.4;
+    }
+    const hs = musicCtx.createBufferSource();
+    hs.buffer = b;
+    const hp = musicCtx.createBiquadFilter();
+    hp.type = "highpass";
+    hp.frequency.value = 4500;
+    const hg = musicCtx.createGain();
+    hg.gain.setValueAtTime(stepInBar % 2 === 0 ? 0.03 : 0.02, now);
+    hg.gain.exponentialRampToValueAtTime(0.0001, now + hatDur);
+    hs.connect(hp).connect(hg).connect(musicCtx.destination);
+    hs.start(now);
+    hs.stop(now + hatDur);
+  }
+
+  // Bass line
+  const bassNotes = [55, 55, 73.4, 65.4, 49, 55, 73.4, 82.4];
+  const bass = musicCtx.createOscillator();
+  const bassGain = musicCtx.createGain();
+  bass.type = "triangle";
+  bass.frequency.setValueAtTime(bassNotes[stepInBar], now);
+  bassGain.gain.setValueAtTime(0.0001, now);
+  bassGain.gain.linearRampToValueAtTime(0.045, now + 0.02);
+  bassGain.gain.exponentialRampToValueAtTime(0.0001, now + beatInterval * 0.9);
+  bass.connect(bassGain).connect(musicCtx.destination);
+  bass.start(now);
+  bass.stop(now + beatInterval * 0.95);
+
+  beatStep += 1;
 }
 
 window.addEventListener("keydown", (event) => {
