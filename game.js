@@ -345,6 +345,8 @@ function draw() {
   drawCourt();
   drawHoop(hoops.left.x, hoops.left.facing);
   drawHoop(hoops.right.x, hoops.right.facing);
+  drawHoop(hoops.left.x, 1);
+  drawHoop(hoops.right.x, -1);
 
   for (const p of players) {
     drawPlayer(p);
@@ -420,6 +422,7 @@ function drawHoop(x, facing) {
 }
 
 function drawPlayer(p) {
+  const bodyTop = p.y - p.height;
   const lean = p.angle * 0.8 + p.tumbleSpin * p.tumble;
 
   ctx.save();
@@ -476,12 +479,23 @@ function drawPlayer(p) {
   ctx.arc(0, -p.height * 0.64, p.width * 0.23, Math.PI * 1.08, Math.PI * 1.92);
   ctx.stroke();
 
+  ctx.fillStyle = p.color;
+  ctx.beginPath();
+  ctx.roundRect(-p.width / 2, -p.height / 2, p.width, p.height, 20);
+  ctx.fill();
+
+  ctx.fillStyle = "#f4d3b2";
+  ctx.beginPath();
+  ctx.arc(0, -p.height / 2 - 20, p.width * 0.32, 0, Math.PI * 2);
+  ctx.fill();
+
   ctx.restore();
 
   const hand = getHandPosition(p);
   ctx.fillStyle = "#ffd6a5";
   ctx.beginPath();
   ctx.arc(hand.x, hand.y, p.handSize * 1.05, 0, Math.PI * 2);
+  ctx.arc(hand.x, hand.y, p.handSize, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.fillStyle = "#000";
