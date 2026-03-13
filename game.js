@@ -46,8 +46,8 @@ const world = {
 };
 
 const hoops = {
-  left: { x: 96 },
-  right: { x: canvas.width - 96 },
+  left: { x: 130, facing: 1 },
+  right: { x: canvas.width - 130, facing: -1 },
 };
 
 let lastTime = performance.now();
@@ -100,10 +100,10 @@ function applyRandomRoundSettings() {
   }
 
   ball.owner = null;
-  ball.x = canvas.width / 2 + randomRange(-90, 90);
-  ball.y = 140;
-  ball.vx = randomRange(-120, 120);
-  ball.vy = randomRange(-30, 100);
+  ball.x = canvas.width / 2;
+  ball.y = FLOOR_Y - 180;
+  ball.vx = randomRange(-40, 40);
+  ball.vy = -40;
 
   roundMessage = `Round ${world.round}: hoop ${world.hoopRadius < 58 ? "small" : "big"}, players ${world.playerScale > 1 ? "chunky" : "tiny"}, hands ${world.handScale > 1 ? "huge" : "small"}`;
   roundMessageTime = 4;
@@ -258,23 +258,37 @@ function triggerTumble(player, dir) {
 
 function handlePossession() {
   for (const p of players) {
-    if (!p.wantHold || p.tumble > 0.25) {
+    if (p.tumble > 0.25) {
       continue;
     }
+
     const hand = getHandPosition(p);
-    const dist = Math.hypot(ball.x - hand.x, ball.y - hand.y);
-    if (dist < ball.r + p.handSize) {
-      if (!ball.owner || ball.owner !== p) {
-        if (ball.owner && ball.owner.team !== p.team) {
-          roundMessage = `${p.name} stole it!`;
-          roundMessageTime = 1.5;
-        }
-        if (ball.owner) {
-          ball.owner.holding = false;
-        }
-        ball.owner = p;
-        p.holding = true;
+    const handDist = Math.hypot(ball.x - hand.x, ball.y - hand.y);
+
+    const bodyCx = p.x + Math.sin(p.angle) * p.height * 0.12;
+    const bodyCy = p.y - p.height * 0.52;
+    const bodyRx = p.width * 0.48;
+    const bodyRy = p.height * 0.6;
+    const ex = (ball.x - bodyCx) / bodyRx;
+    const ey = (ball.y - bodyCy) / bodyRy;
+    const bodyTouch = ex * ex + ey * ey < 1.05;
+
+    const canCatch = handDist < ball.r + p.handSize || bodyTouch;
+    if (!canCatch) {
+      continue;
+    }
+
+    if (!ball.owner || ball.owner !== p) {
+      if (ball.owner && ball.owner.team !== p.team) {
+        roundMessage = `${p.name} stole it!`;
+        roundMessageTime = 1.5;
       }
+      if (ball.owner) {
+        ball.owner.holding = false;
+      }
+      ball.owner = p;
+      p.holding = true;
+      p.wantHold = true;
     }
   }
 }
@@ -315,11 +329,11 @@ function scoreRound(teamScored) {
 }
 
 function getHandPosition(player) {
-  const lift = player.wantHold ? player.height * 0.72 : player.height * 0.48;
+  const lift = player.wantHold ? player.height * 0.78 : player.height * 0.53;
   const bodyLeanX = Math.sin(player.angle) * (player.height * 0.22);
   const wobble = Math.sin((world.time + player.swayPhase) * Math.PI * 2) * 6;
   return {
-    x: player.x + bodyLeanX + player.dir * (player.width * 0.3 + wobble),
+    x: player.x + bodyLeanX + player.dir * (player.width * 0.52 + wobble),
     y: player.y - lift,
   };
 }
@@ -329,6 +343,8 @@ function draw() {
 
   drawBackground();
   drawCourt();
+  drawHoop(hoops.left.x, hoops.left.facing);
+  drawHoop(hoops.right.x, hoops.right.facing);
   drawHoop(hoops.left.x, 1);
   drawHoop(hoops.right.x, -1);
 
@@ -413,6 +429,56 @@ function drawPlayer(p) {
   ctx.translate(p.x, p.y - p.height * 0.5);
   ctx.rotate(lean);
 
+  // high socks
+  ctx.fillStyle = "#f5f5f5";
+  ctx.fillRect(-p.width * 0.28, p.height * 0.32, p.width * 0.18, p.height * 0.22);
+  ctx.fillRect(p.width * 0.1, p.height * 0.32, p.width * 0.18, p.height * 0.22);
+
+  // shorts + jersey
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(-p.width * 0.34, p.height * 0.08, p.width * 0.68, p.height * 0.22);
+  ctx.fillStyle = p.color;
+  ctx.beginPath();
+  ctx.roundRect(-p.width / 2, -p.height / 2, p.width, p.height * 0.72, 18);
+  ctx.fill();
+
+  // arms (longer)
+  ctx.strokeStyle = "#f1c7a3";
+  ctx.lineWidth = Math.max(5, p.width * 0.11);
+  ctx.lineCap = "round";
+  const armY = -p.height * 0.18;
+  const armReach = p.width * 0.78;
+  const armLift = p.wantHold ? -p.height * 0.32 : -p.height * 0.12;
+  ctx.beginPath();
+  ctx.moveTo(-p.width * 0.18, armY);
+  ctx.lineTo(-armReach, armY + armLift);
+  ctx.moveTo(p.width * 0.18, armY);
+  ctx.lineTo(armReach, armY + armLift);
+  ctx.stroke();
+
+  // head
+  ctx.fillStyle = "#f4d3b2";
+  ctx.beginPath();
+  ctx.arc(0, -p.height * 0.62, p.width * 0.28, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 70s afro
+  ctx.fillStyle = "#1d120a";
+  ctx.beginPath();
+  ctx.arc(0, -p.height * 0.72, p.width * 0.38, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#f4d3b2";
+  ctx.beginPath();
+  ctx.arc(0, -p.height * 0.62, p.width * 0.26, 0, Math.PI * 2);
+  ctx.fill();
+
+  // sweatband
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = Math.max(3, p.width * 0.08);
+  ctx.beginPath();
+  ctx.arc(0, -p.height * 0.64, p.width * 0.23, Math.PI * 1.08, Math.PI * 1.92);
+  ctx.stroke();
+
   ctx.fillStyle = p.color;
   ctx.beginPath();
   ctx.roundRect(-p.width / 2, -p.height / 2, p.width, p.height, 20);
@@ -428,6 +494,7 @@ function drawPlayer(p) {
   const hand = getHandPosition(p);
   ctx.fillStyle = "#ffd6a5";
   ctx.beginPath();
+  ctx.arc(hand.x, hand.y, p.handSize * 1.05, 0, Math.PI * 2);
   ctx.arc(hand.x, hand.y, p.handSize, 0, Math.PI * 2);
   ctx.fill();
 
