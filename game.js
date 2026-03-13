@@ -38,7 +38,7 @@ const ball = {
 const world = {
   gravity: BASE_GRAVITY,
   hoopRadius: 58,
-  hoopY: 250,
+  hoopY: 285,
   playerScale: 1,
   handScale: 1,
   round: 1,
@@ -130,8 +130,7 @@ function update(dt) {
     if (p.wantHold && onGround && p.jumpCooldown <= 0 && p.tumble <= 0) {
       p.vy = -760;
       p.jumpCooldown = 0.28;
-      p.vx += Math.sin(p.angle) * 420;
-      p.vx += p.dir * 60;
+      p.vx += Math.sin(p.angle) * 520;
       playGrunt();
     }
 
@@ -161,10 +160,7 @@ function update(dt) {
     p.x = clamp(p.x, 60, canvas.width - 60);
 
     if (p.holding && !p.wantHold) {
-      p.holding = false;
-      ball.owner = null;
-      ball.vx = p.vx + p.dir * 220 + Math.sin(p.angle) * 180;
-      ball.vy = p.vy - 150;
+      releaseBallFromPlayer(p);
     }
   }
 
@@ -181,6 +177,8 @@ function update(dt) {
     ball.vy += world.gravity * dt;
     ball.x += ball.vx * dt;
     ball.y += ball.vy * dt;
+
+    handleHoopCollisions();
 
     if (ball.x < ball.r) {
       ball.x = ball.r;
@@ -254,6 +252,83 @@ function triggerTumble(player, dir) {
   player.tumble = randomRange(0.6, 1.2);
   player.tumbleSpin = dir * randomRange(3.4, 5.1);
   player.vy = Math.min(player.vy, -220);
+}
+
+function releaseBallFromPlayer(player) {
+  player.holding = false;
+  ball.owner = null;
+
+  const targetHoop = player.team === 0 ? hoops.right : hoops.left;
+  const aimGood = Math.random() < 0.3;
+  const flightT = randomRange(0.82, 1.04);
+
+  const startX = ball.x;
+  const startY = ball.y;
+
+  let targetX = targetHoop.x;
+  let targetY = world.hoopY + 4;
+
+  if (!aimGood) {
+    const missType = Math.random();
+    if (missType < 0.45) {
+      // backboard miss
+      targetX = targetHoop.x - targetHoop.facing * randomRange(26, 36);
+      targetY = world.hoopY - randomRange(24, 50);
+    } else {
+      // rim miss
+      targetX = targetHoop.x + randomRange(-38, 38);
+      targetY = world.hoopY - randomRange(4, 20);
+    }
+  }
+
+  ball.vx = (targetX - startX) / flightT;
+  ball.vy = (targetY - startY - 0.5 * world.gravity * flightT * flightT) / flightT;
+  ball.vx += player.vx * 0.2 + Math.sin(player.angle) * 40;
+}
+
+function handleHoopCollisions() {
+  for (const hoop of [hoops.left, hoops.right]) {
+    const boardX = hoop.x - hoop.facing * 28;
+    const boardY = world.hoopY - 125;
+    const boardW = 18;
+    const boardH = 125;
+
+    if (
+      ball.x + ball.r > boardX - boardW / 2 &&
+      ball.x - ball.r < boardX + boardW / 2 &&
+      ball.y + ball.r > boardY &&
+      ball.y - ball.r < boardY + boardH
+    ) {
+      ball.x = hoop.facing > 0 ? boardX + boardW / 2 + ball.r : boardX - boardW / 2 - ball.r;
+      ball.vx *= -0.75;
+      ball.vy *= 0.94;
+    }
+
+    const rimR = world.hoopRadius * 0.22;
+    const rimPts = [
+      { x: hoop.x - world.hoopRadius * 0.28, y: world.hoopY },
+      { x: hoop.x + world.hoopRadius * 0.28, y: world.hoopY },
+    ];
+
+    for (const rp of rimPts) {
+      const dx = ball.x - rp.x;
+      const dy = ball.y - rp.y;
+      const dist = Math.hypot(dx, dy) || 0.01;
+      const hit = dist < ball.r + rimR;
+      if (hit) {
+        const nx = dx / dist;
+        const ny = dy / dist;
+        const overlap = ball.r + rimR - dist;
+        ball.x += nx * overlap;
+        ball.y += ny * overlap;
+        const vDot = ball.vx * nx + ball.vy * ny;
+        ball.vx -= 1.7 * vDot * nx;
+        ball.vy -= 1.7 * vDot * ny;
+        ball.vx *= 0.9;
+        ball.vy *= 0.9;
+      }
+    }
+  }
 }
 
 function handlePossession() {
@@ -337,11 +412,11 @@ function scoreRound(teamScored) {
 }
 
 function getHandPosition(player) {
-  const lift = player.wantHold ? player.height * 0.8 : player.height * 0.55;
+  const lift = player.wantHold ? player.height * 0.82 : player.height * 0.56;
   const bodyLeanX = Math.sin(player.angle) * (player.height * 0.22);
   const wobble = Math.sin((world.time + player.swayPhase) * Math.PI * 2) * 6;
   return {
-    x: player.x + bodyLeanX + player.dir * (player.width * 0.64 + wobble),
+    x: player.x + bodyLeanX + player.dir * (player.width * 0.76 + wobble),
     y: player.y - lift,
   };
 }
@@ -434,58 +509,84 @@ function drawPlayer(p) {
   ctx.translate(p.x, p.y - p.height * 0.5);
   ctx.rotate(lean);
 
-  // high socks
-  ctx.fillStyle = "#f5f5f5";
-  ctx.fillRect(-p.width * 0.28, p.height * 0.32, p.width * 0.18, p.height * 0.22);
-  ctx.fillRect(p.width * 0.1, p.height * 0.32, p.width * 0.18, p.height * 0.22);
+  // legs (two)
+  ctx.fillStyle = "#f1c7a3";
+  ctx.fillRect(-p.width * 0.22, p.height * 0.18, p.width * 0.14, p.height * 0.34);
+  ctx.fillRect(p.width * 0.08, p.height * 0.18, p.width * 0.14, p.height * 0.34);
+
+  // higher socks
+  ctx.fillStyle = "#f9f9f9";
+  ctx.fillRect(-p.width * 0.23, p.height * 0.24, p.width * 0.16, p.height * 0.27);
+  ctx.fillRect(p.width * 0.07, p.height * 0.24, p.width * 0.16, p.height * 0.27);
+
+  // Converse sneakers
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath();
+  ctx.roundRect(-p.width * 0.3, p.height * 0.5, p.width * 0.24, p.height * 0.08, 6);
+  ctx.roundRect(p.width * 0.02, p.height * 0.5, p.width * 0.24, p.height * 0.08, 6);
+  ctx.fill();
+  ctx.strokeStyle = "#1c1c1c";
+  ctx.lineWidth = 2;
+  ctx.stroke();
 
   // shorts + jersey
   ctx.fillStyle = "#ffffff";
-  ctx.fillRect(-p.width * 0.34, p.height * 0.08, p.width * 0.68, p.height * 0.22);
+  ctx.fillRect(-p.width * 0.34, p.height * 0.03, p.width * 0.68, p.height * 0.22);
   ctx.fillStyle = p.color;
   ctx.beginPath();
   ctx.roundRect(-p.width / 2, -p.height / 2, p.width, p.height * 0.72, 18);
   ctx.fill();
 
-  // arms (longer)
+  // arms (exactly two)
   ctx.strokeStyle = "#f1c7a3";
   ctx.lineWidth = Math.max(5, p.width * 0.11);
   ctx.lineCap = "round";
   const armY = -p.height * 0.18;
-  const armReach = p.width * 0.92;
-  const armLift = p.wantHold ? -p.height * 0.38 : -p.height * 0.15;
+  const armReach = p.width * 1.02;
+  const armLift = p.wantHold ? -p.height * 0.42 : -p.height * 0.16;
   ctx.beginPath();
-  ctx.moveTo(-p.width * 0.18, armY);
+  ctx.moveTo(-p.width * 0.2, armY);
   ctx.lineTo(-armReach, armY + armLift);
-  ctx.moveTo(p.width * 0.18, armY);
+  ctx.moveTo(p.width * 0.2, armY);
   ctx.lineTo(armReach, armY + armLift);
+  ctx.stroke();
+
+  // wrist sport bands
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = Math.max(2, p.width * 0.06);
+  ctx.beginPath();
+  ctx.moveTo(-armReach * 0.9, armY + armLift * 0.94);
+  ctx.lineTo(-armReach * 0.83, armY + armLift * 0.93);
+  ctx.moveTo(armReach * 0.83, armY + armLift * 0.93);
+  ctx.lineTo(armReach * 0.9, armY + armLift * 0.94);
   ctx.stroke();
 
   // head
   ctx.fillStyle = "#f4d3b2";
   ctx.beginPath();
-  ctx.arc(0, -p.height * 0.62, p.width * 0.28, 0, Math.PI * 2);
+  ctx.arc(0, -p.height * 0.62, p.width * 0.27, 0, Math.PI * 2);
   ctx.fill();
 
-  // 70s afro
+  // larger 70s afro
   ctx.fillStyle = "#1d120a";
   ctx.beginPath();
-  ctx.arc(0, -p.height * 0.72, p.width * 0.38, 0, Math.PI * 2);
+  ctx.arc(0, -p.height * 0.75, p.width * 0.5, 0, Math.PI * 2);
   ctx.fill();
   ctx.fillStyle = "#f4d3b2";
   ctx.beginPath();
-  ctx.arc(0, -p.height * 0.62, p.width * 0.26, 0, Math.PI * 2);
+  ctx.arc(0, -p.height * 0.62, p.width * 0.25, 0, Math.PI * 2);
   ctx.fill();
 
-  // sweatband
+  // forehead sport band
   ctx.strokeStyle = "#ffffff";
-  ctx.lineWidth = Math.max(3, p.width * 0.08);
+  ctx.lineWidth = Math.max(3, p.width * 0.085);
   ctx.beginPath();
-  ctx.arc(0, -p.height * 0.64, p.width * 0.23, Math.PI * 1.08, Math.PI * 1.92);
+  ctx.arc(0, -p.height * 0.64, p.width * 0.23, Math.PI * 1.06, Math.PI * 1.94);
   ctx.stroke();
 
   ctx.restore();
 
+  // dominant hand only (no extra floating limb)
   const hand = getHandPosition(p);
   ctx.fillStyle = "#ffd6a5";
   ctx.beginPath();
